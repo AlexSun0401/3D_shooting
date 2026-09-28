@@ -45,6 +45,8 @@ typedef struct {
     q16 Dis_Tar;
     int hitTarget;
     int side;
+    // First occupied cell in traversal order; both -1 when no target is found.
+    int targetX, targetY;
 } RayHit;
 
 typedef struct {

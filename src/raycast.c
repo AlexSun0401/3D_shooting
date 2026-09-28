@@ -43,12 +43,9 @@ void init_cameraX_LUT(void)
         cameraXLUT[x] = q16_div(a, q16_FROM_INT(LOG_W)) - q16_ONE;
     }
 }
-//rendering player's view
-RayHit raycast_column(Player *p, int x)
+// Shared grid traversal for rendering and shooting.
+RayHit raycast_ray(const Player *p, q16 rayDirX, q16 rayDirY)
 {
-    q16 cameraX = cameraXLUT[x];
-    q16 rayDirX = p->dirX + q16_mul(p->planeX, cameraX);
-    q16 rayDirY = p->dirY + q16_mul(p->planeY, cameraX);
     //player's position
     int mapX = q16_TO_INT(p->posX);
     int mapY = q16_TO_INT(p->posY);
@@ -80,6 +77,8 @@ RayHit raycast_column(Player *p, int x)
     out.hitTarget = 0;
     out.side = 0;
     out.Dis_Wall = q16_ONE;
+    out.targetX = -1;
+    out.targetY = -1;
 
     while (1)
     {
@@ -98,6 +97,11 @@ RayHit raycast_column(Player *p, int x)
 
         if (mapX >= 0 && mapX < MAP_W && mapY >= 0 && mapY < MAP_H && targetGrid[mapY][mapX])
         {
+            // Shooting hits the first occupied cell, regardless of distance rounding.
+            if (out.targetX < 0) {
+                out.targetX = mapX;
+                out.targetY = mapY;
+            }
             if (cellDist < out.Dis_Tar) {
                 out.Dis_Tar = cellDist;
                 out.hitTarget = 1;
@@ -113,6 +117,15 @@ RayHit raycast_column(Player *p, int x)
             return out;
         }
     }
+}
+
+// Convert a screen column to a direction; all traversal stays in raycast_ray().
+RayHit raycast_column(Player *p, int x)
+{
+    q16 cameraX = cameraXLUT[x];
+    q16 rayDirX = p->dirX + q16_mul(p->planeX, cameraX);
+    q16 rayDirY = p->dirY + q16_mul(p->planeY, cameraX);
+    return raycast_ray(p, rayDirX, rayDirY);
 }
 
 void render_frame(Player *p)

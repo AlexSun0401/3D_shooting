@@ -27,7 +27,9 @@ Positions, direction vectors, camera-plane values, and distances use signed Q16.
 
 ### DDA raycasting
 
-`raycast_column()` creates a ray from the player direction and a precomputed camera-x value. It advances through the 16 × 16 map grid along the nearest x or y boundary until it reaches a wall. During traversal, it also records the nearest target cell.
+`raycast_column()` creates a ray from the player direction and a precomputed camera-x value, then calls `raycast_ray()` with explicit Q16.16 `rayDirX` and `rayDirY` values. `fire_center()` calls the same read-only core with the player's direction. This is the only DDA traversal implementation: it advances through the 16 × 16 map grid along the nearest x or y boundary until it reaches a wall.
+
+`RayHit` retains wall distance/side and the nearest target distance for rendering, and adds the first occupied cell's `targetX`/`targetY` for shooting (`-1` when absent). Equal boundary distances still step in y first. Each cell's target is recorded before its wall check, preserving shots at targets occupying a wall cell. Target visibility, kills, score, cooldown, and audio remain caller responsibilities; the core does not mutate game state.
 
 For every one of the 320 logical columns, `render_frame()` stores the wall distance in `zBuffer`, projects wall and target heights, and builds an intermediate character view. This depth test prevents a target behind a wall from being drawn.
 
@@ -42,7 +44,7 @@ For every one of the 320 logical columns, `render_frame()` stores the wall dista
 | `main`, `game` | Application lifecycle, game loop, and state reset |
 | `common`, `fixed` | Shared data types, constants, and Q16.16 arithmetic |
 | `world` | Static wall map, target occupancy grid, and collision query |
-| `player` | Movement, rotation, firing ray, and hit processing |
+| `player` | Movement, rotation, firing direction, and hit processing |
 | `target` | Target initialization, horizontal movement, and shared target state |
 | `raycast` | Camera lookup table, DDA traversal, depth buffer, and scene projection |
 | `render`, `cover` | RGB565 frames, character HUD, overlays, and title screen |
