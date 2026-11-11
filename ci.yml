@@ -1,0 +1,192 @@
+# CI for 3D Shooting, a bare-metal C raycaster for the DE1-SoC.
+#
+# The game reads and writes memory-mapped peripherals at fixed addresses
+# (include/hw.h), so a host-built binary must never be executed
+# (docs/BUILD_AND_RUN.md). Every job is therefore a compile-, link- or
+# analysis-time check, and nothing in this file runs build/3d_shooting.
+#
+#   make check            the project's own syntax gate, exactly as a developer runs it
+#   build (gcc | clang)   full compile and link of src/ and assets/ with two front ends
+#   32-bit target model   the same sources under the target's data model, with
+#                         bug-class diagnostics as errors, then static analysis
+
+name: CI
+
+on:
+  push:               # every branch and every tag
+  pull_request:       # needed for forks; same-repository branches are covered by `push`
+  workflow_dispatch:  # manual run from the Actions tab
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # A newer push supersedes an older run on topic branches and pull requests.
+  # Every push to the default branch keeps its own verdict.
+  cancel-in-progress: ${{ github.ref_name != github.event.repository.default_branch }}
+
+defaults:
+  run:
+    shell: bash  # explicit bash runs with `-eo pipefail`
+
+env:
+  # Prints a variable of the project Makefile without modifying it, so CI never
+  # keeps a second copy of the source list or the output path. Usage:
+  #   make -s --eval="$MAKE_PRINT" ci-print-SOURCES
+  MAKE_PRINT: "ci-print-%: ; @echo $($*)"
+
+jobs:
+  check:
+    name: make check
+    # A pull request from a branch of this repository already has a `push` run.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Toolchain
+        run: |
+          gcc --version | sed -n 1p
+          make --version | sed -n 1p
+
+      - name: make check
+        run: make check
+
+  build:
+    name: build (${{ matrix.cc }})
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    env:
+      CC: ${{ matrix.cc }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Toolchain
+        run: |
+          "$CC" --version | sed -n 1p
+          make --version | sed -n 1p
+
+      # Linking is what proves that every module and both asset units resolve;
+      # `make check` alone cannot see a missing or unlinked translation unit.
+      # The Makefile sets `CC := gcc`, which ignores the environment, so the
+      # compiler has to be passed on the command line.
+      - name: Compile and link
+        run: make -j"$(nproc)" --output-sync=target CC="$CC"
+
+      - name: Report image size
+        run: |
+          image="$(make -s --eval="$MAKE_PRINT" ci-print-TARGET)"
+          test -f "$image"
+          {
+            echo "### Link check with \`$CC\`"
+            echo
+            echo '```text'
+            size "$image"
+            echo '```'
+            echo
+            echo "Host link-validation artifact only. It is never run or uploaded,"
+            echo "because it dereferences the peripheral addresses in \`include/hw.h\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  target-model:
+    name: 32-bit target model
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      # The DE1-SoC CPU is 32-bit and the game runs without an operating system.
+      # ILP32 plus freestanding models that on the runner. The frame-buffer
+      # address casts in src/render.c and src/cover.c warn about pointer width on
+      # a 64-bit host and are exact here, so a diagnostic that survives is real.
+      # The sources use no C library today. A hosted header such as <stdio.h> is
+      # deliberately unavailable under this model and fails this job; if the game
+      # starts to rely on a C library, install gcc-multilib here first.
+      MODEL: -m32 -ffreestanding
+      # Diagnostics that are always defects in MMIO and fixed-point code:
+      # undeclared calls and mismatched types (GCC 14 and later reject these by
+      # default, which pins the verdict across GCC versions), integer/pointer
+      # width mismatches, `volatile` dropped from a peripheral pointer, and
+      # out-of-range Q16.16 shifts. Everything else stays a warning and is
+      # annotated on the commit instead of failing the run.
+      BUG_CLASS: >-
+        -Werror=implicit-function-declaration
+        -Werror=implicit-int
+        -Werror=int-conversion
+        -Werror=incompatible-pointer-types
+        -Werror=return-type
+        -Werror=int-to-pointer-cast
+        -Werror=pointer-to-int-cast
+        -Werror=discarded-qualifiers
+        -Werror=shift-count-overflow
+        -Werror=shift-count-negative
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Toolchain
+        run: |
+          gcc --version | sed -n 1p
+          clang --version | sed -n 1p
+
+      # Turns `file:line:col: warning|error: message` into annotations.
+      - name: Annotate compiler diagnostics
+        run: |
+          cat > "$RUNNER_TEMP/cc-matcher.json" <<'JSON'
+          {
+            "problemMatcher": [
+              {
+                "owner": "cc",
+                "pattern": [
+                  {
+                    "regexp": "^(.+?):(\\d+):(\\d+): (?:fatal )?(warning|error): (.+)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5
+                  }
+                ]
+              }
+            ]
+          }
+          JSON
+          echo "::add-matcher::$RUNNER_TEMP/cc-matcher.json"
+
+      # The extra flags ride on CC so that the project's own CPPFLAGS and CFLAGS
+      # stay in force.
+      - name: Strict check (gcc)
+        run: make check CC="gcc $MODEL $BUG_CLASS"
+
+      # Path-sensitive analysis of every translation unit; any finding fails the
+      # job. The dead-store checker is off because it reports style, not defects.
+      - name: Static analysis (Clang Static Analyzer)
+        run: |
+          read -ra sources  <<< "$(make -s --eval="$MAKE_PRINT" ci-print-SOURCES)"
+          read -ra cppflags <<< "$(make -s --eval="$MAKE_PRINT" ci-print-CPPFLAGS)"
+          read -ra model    <<< "$MODEL"
+          if (( ${#sources[@]} == 0 )); then
+            echo "::error::The Makefile exposes no SOURCES, so there is nothing to analyse."
+            exit 1
+          fi
+          clang --analyze --analyzer-output text \
+            -Xclang -analyzer-werror \
+            -Xclang -analyzer-disable-checker -Xclang deadcode \
+            "${cppflags[@]}" -std=c11 "${model[@]}" "${sources[@]}"
+          echo "Analysed ${#sources[@]} translation units with no findings."
