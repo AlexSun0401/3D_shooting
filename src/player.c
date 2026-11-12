@@ -1,4 +1,5 @@
 #include "player.h"
+#include "raycast.h"
 #include "fixed.h"
 #include "world.h"
 #include "target.h"
@@ -39,70 +40,24 @@ void fire_center(Player *p)
     p->cooldown = 6; //this is just a short duration time
     //to ensure that you don't fire so frequently
 
-    q16 rayDirX = p->dirX;
-    q16 rayDirY = p->dirY;
+    RayHit hit = raycast_ray(p, p->dirX, p->dirY);
+    if (!target_visible || hit.targetX < 0) return;
 
-    int mapX = q16_TO_INT(p->posX);
-    int mapY = q16_TO_INT(p->posY);  
+    targetGrid[hit.targetY][hit.targetX] = 0;
 
-    q16 deltaX = (rayDirX == 0) ? (q16)0x7fffffff : q16_abs(q16_div(q16_ONE, rayDirX));
-    q16 deltaY = (rayDirY == 0) ? (q16)0x7fffffff : q16_abs(q16_div(q16_ONE, rayDirY));
-
-    int stepX, stepY;
-    q16 sideX, sideY;
-
-    if (rayDirX < 0) {
-        stepX = -1;
-        sideX = q16_mul(p->posX - q16_FROM_INT(mapX), deltaX);
-    } else {
-        stepX = +1;
-        sideX = q16_mul(q16_FROM_INT(mapX + 1) - p->posX, deltaX);
+    for (int i = 0; i < MAX_TARGETS; i++) {
+        if (targets[i].alive &&
+            targets[i].x == hit.targetX &&
+            targets[i].y == hit.targetY) {
+            targets[i].alive = 0;
+            break;
+        }
     }
 
-    if (rayDirY < 0) {
-        stepY = -1;
-        sideY = q16_mul(p->posY - q16_FROM_INT(mapY), deltaY);
-    } else {
-        stepY = +1;
-        sideY = q16_mul(q16_FROM_INT(mapY + 1) - p->posY, deltaY);
-    }  //these if statements are to check in which direction we should move the ray
+    p->score++;
+    target_num++;
+    target_visible = 0;
 
-    while (1)
-    {
-        if (sideX < sideY) {
-            sideX += deltaX;
-            mapX += stepX;
-        } else {
-            sideY += deltaY;
-            mapY += stepY;
-        }
-
-        if (mapX < 0 || mapX >= MAP_W || mapY < 0 || mapY >= MAP_H) return; //if the ray goes out of bound, stop checking
-
-        if (targetGrid[mapY][mapX] && target_visible)
-        {
-            targetGrid[mapY][mapX] = 0;
-
-            for (int i = 0; i < MAX_TARGETS; i++) {
-                if (targets[i].alive &&
-                    targets[i].x == mapX &&
-                    targets[i].y == mapY) {
-                    targets[i].alive = 0;
-                    break;
-                }
-            } //This is to manually reset target.alive to 0 so that we don't need to 
-            //move this target in the "target movement" section
-
-            p->score++;
-            target_num++;
-            target_visible = 0; //increment score and "hide" the target permanently so
-            //we don't have to shoot it again
-
-            shot_sound.playing = 1;
-            shot_sound.index = 0;  //start playing shooting sound effect
-            return;
-        }
-
-        if (is_wall(mapX, mapY)) return; //if the ray hits wall, stop checking
-    }
+    shot_sound.playing = 1;
+    shot_sound.index = 0; // Restart the hit sound; fire sound is handled by main().
 }

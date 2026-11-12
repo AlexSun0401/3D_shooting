@@ -23,6 +23,8 @@ make
 
 `make check` performs a syntax-only pass over the complete project. `make` also links the modules and writes `build/3d_shooting`.
 
+Run `make test` for the host-safe DDA and shooting regression checks. This separate test executable links only software modules and in-memory sound state, so it does not access MMIO. It covers cardinal rays, camera projection, grid-corner ties, wall-distance clamping, target ordering/occlusion, visibility, cooldown, scoring, and hit-sound state.
+
 > [!WARNING]
 > Do not run the host-built executable. It will attempt to dereference the fixed VGA, PS/2, audio, character-buffer, and HEX addresses declared in `include/hw.h`.
 
